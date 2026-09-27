@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0",
+  "stream": "soa-2026-autumn",
+  "tasks": ["task_1"],
+  "diff": {
+    "original": {
+      "repo": "ippaveln/soa_stand_autumn_2026",
+      "ref": "master"
+    },
+    "allow_prefix": "orders/"
+  }
+}

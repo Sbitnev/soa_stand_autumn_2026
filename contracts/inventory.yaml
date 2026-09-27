@@ -1,0 +1,113 @@
+openapi: 3.0.3
+info:
+  title: Inventory
+  version: "1.0"
+  description: |
+    Склад: резервирует товар под заказ. Адрес — переменная окружения
+    `INVENTORY_URL`. Резерв один на заказ и определяется его `order_id`.
+servers:
+  - url: http://mocks:8080
+paths:
+  /reservations:
+    post:
+      summary: Зарезервировать товар под заказ
+      description: |
+        Если по этому `order_id` резерв уже действует, возвращается он же
+        с кодом `200`, новый не создаётся.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReservationRequest"
+            example:
+              order_id: "3f0c6d1e-8a52-4c1b-9d7e-2b6f3a1c9e40"
+              items:
+                - { sku: sku-1, qty: 2 }
+      responses:
+        "201":
+          description: Резерв создан
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reservation"
+        "200":
+          description: Резерв по этому заказу уже действует
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reservation"
+        "400":
+          description: Некорректное тело запроса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      summary: Резерв по заказу
+      parameters:
+        - name: order_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Резерв (пустой список, если его не было)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Reservation"
+  /reservations/{order_id}:
+    delete:
+      summary: Снять резерв
+      description: |
+        Снимает резерв по заказу. Повторный вызов и вызов для заказа без
+        резерва тоже отвечают `204`.
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Резерва по заказу больше нет
+components:
+  schemas:
+    ReservationRequest:
+      type: object
+      required: [order_id, items]
+      properties:
+        order_id:
+          type: string
+          minLength: 1
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [sku, qty]
+            properties:
+              sku: { type: string, minLength: 1 }
+              qty: { type: integer, minimum: 1 }
+    Reservation:
+      type: object
+      required: [order_id, status, items]
+      properties:
+        order_id: { type: string }
+        status:
+          type: string
+          enum: [held, released]
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              sku: { type: string }
+              qty: { type: integer }
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        message: { type: string }

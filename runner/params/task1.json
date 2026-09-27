@@ -1,0 +1,38 @@
+{
+  "seed": 1,
+  "budget_ms": 1000,
+  "wait_s": 30,
+  "request_timeout_ms": 10000,
+  "scenarios": {
+    "S1": {
+      "orders": 50,
+      "rate_per_s": 10,
+      "payment": { "decline_rate": 0.1 }
+    },
+    "S2": {
+      "orders": 50,
+      "rate_per_s": 10,
+      "payment": { "fail_rate": 0.33 },
+      "min_paid": 0.9
+    },
+    "S3": {
+      "orders": 20,
+      "rate_per_s": 5,
+      "payment": { "latency_ms": 2000 }
+    },
+    "S4": {
+      "orders": 50,
+      "rate_per_s": 2,
+      "payment": { "blackhole_s": 60 },
+      "down_after_s": 0,
+      "orders_after": 20,
+      "after_rate_per_s": 5,
+      "max_requests_down": 30
+    },
+    "S5": {
+      "orders": 20,
+      "rate_per_s": 5,
+      "payment": { "lost_response": "first_per_order" }
+    }
+  }
+}

@@ -1,0 +1,131 @@
+openapi: 3.0.3
+info:
+  title: Payment
+  version: "1.0"
+  description: |
+    Платёжный сервис: списывает деньги за заказ. Адрес — переменная
+    окружения `PAYMENT_URL`.
+servers:
+  - url: http://mocks:8080
+paths:
+  /payments:
+    post:
+      summary: Списать деньги
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 255
+          description: |
+            Необязательный ключ операции, выбирает клиент.
+
+            - Без ключа каждый успешный запрос — новое списание.
+            - С ключом первый успешный запрос выполняет списание (`201`).
+              Запрос с тем же ключом и тем же телом возвращает результат
+              той операции (`200` и тот же `charge_id`, или снова `402`),
+              новое списание не выполняется.
+            - Тот же ключ с другим телом — `422`.
+            - Одновременные запросы с одним ключом обрабатываются по очереди.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChargeRequest"
+            example: { order_id: "3f0c6d1e-8a52-4c1b-9d7e-2b6f3a1c9e40", amount_cents: 99800, currency: RUB }
+      responses:
+        "201":
+          description: Деньги списаны
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Charge"
+        "200":
+          description: Операция с этим ключом уже была выполнена; возвращается она же
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Charge"
+        "400":
+          description: Некорректное тело запроса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "402":
+          description: Банк отклонил оплату, деньги не списаны
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: declined, message: банк отклонил оплату }
+        "422":
+          description: Ключ уже использован с другим телом запроса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: idempotency_key_reused }
+        "500":
+          description: Внутренняя ошибка, деньги не списаны
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { error: internal }
+    get:
+      summary: Списания по заказу
+      parameters:
+        - name: order_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Все списания по заказу (пустой список, если их нет)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Charge"
+        "400":
+          description: Нет параметра order_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  schemas:
+    ChargeRequest:
+      type: object
+      required: [order_id, amount_cents, currency]
+      properties:
+        order_id:
+          type: string
+          minLength: 1
+        amount_cents:
+          type: integer
+          format: int64
+          minimum: 1
+        currency:
+          type: string
+          example: RUB
+    Charge:
+      type: object
+      required: [charge_id, order_id, amount_cents, currency, status]
+      properties:
+        charge_id: { type: string }
+        order_id: { type: string }
+        amount_cents: { type: integer, format: int64 }
+        currency: { type: string }
+        status:
+          type: string
+          enum: [captured]
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        message: { type: string }

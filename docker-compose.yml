@@ -1,0 +1,120 @@
+# Учебный стенд: Postgres, заглушки Payment и Inventory, ваш сервис Orders и раннер.
+# Меняется только ./orders — остальное трогать не нужно.
+name: soa-stand
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: orders
+      POSTGRES_USER: orders
+      POSTGRES_PASSWORD: orders
+    # База живёт в памяти и пересоздаётся при каждом make up / make scenarios:
+    # каждый прогон начинается с пустой базы.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orders -d orders"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mocks:
+    build: ./mocks
+    environment:
+      # Токен к /admin/*: его знают только mocks и runner (make задаёт
+      # случайный на каждый запуск), ваш сервис управлять заглушками не может.
+      MOCKS_ADMIN_TOKEN: ${MOCKS_ADMIN_TOKEN:-}
+      # Заказы с дашборда (кнопки «Отправить») — только на этот адрес.
+      ORDERS_URL: http://orders:8080
+      # Прогоны с дашборда (make ui): сервис runner-ui, имя есть только в
+      # admin-сети. Не поднят — дашборд подскажет «make ui».
+      RUNNER_UI_URL: http://runner-admin:8081
+    ports:
+      - "127.0.0.1:${MOCKS_PORT:-8090}:8080"
+    # default — общая сеть с вашим сервисом (http://mocks:8080); admin — только
+    # с раннером: трафик раннер↔заглушки в сеть вашего сервиса не попадает.
+    networks:
+      default:
+        priority: 10  # первой: через неё опубликован порт на хост
+      admin:
+        aliases: [mocks-admin]
+    healthcheck:
+      test: ["CMD", "/mocks", "-healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  orders:
+    # ORDERS_DIR — только для локальных экспериментов (например,
+    # ORDERS_DIR=./examples/go); проверка всегда собирает ./orders.
+    build: ${ORDERS_DIR:-./orders}
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgres://orders:orders@postgres:5432/orders?sslmode=disable
+      PAYMENT_URL: http://mocks:8080
+      INVENTORY_URL: http://mocks:8080
+    ports:
+      - "127.0.0.1:${ORDERS_PORT:-8080}:8080"
+    # Сырые сокеты сервису не нужны, повышать привилегии — тоже.
+    cap_drop: [NET_RAW]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mocks:
+        condition: service_healthy
+
+  runner:
+    build: ./runner
+    profiles: ["runner"]
+    environment:
+      ORDERS_URL: http://orders:8080
+      # Заглушки — через admin-сеть (имя mocks-admin есть только в ней).
+      MOCKS_URL: http://mocks-admin:8080
+      MOCKS_ADMIN_TOKEN: ${MOCKS_ADMIN_TOKEN:-}
+    networks: [default, admin]
+    depends_on:
+      mocks:
+        condition: service_healthy
+      orders:
+        condition: service_started
+
+  # Прогоны сценариев по кнопке с дашборда: make ui. Тот же раннер в режиме
+  # сервиса; API слушает только запросы заглушек из admin-сети (имя
+  # runner-admin есть только там) и с токеном. В default-сети — чтобы ходить
+  # в Orders, как runner. В make up, make scenarios и проверку не входит.
+  runner-ui:
+    build: ./runner
+    profiles: ["ui"]
+    command: ["-serve", ":8081", "-results", "/results/task_1.json", "-allow-from", "mocks-admin"]
+    environment:
+      ORDERS_URL: http://orders:8080
+      MOCKS_URL: http://mocks-admin:8080
+      MOCKS_ADMIN_TOKEN: ${MOCKS_ADMIN_TOKEN:-}
+    volumes:
+      - ./results:/results
+    networks:
+      default:
+      admin:
+        aliases: [runner-admin]
+
+  # Контракты в Swagger UI: make docs → http://localhost:8091. Профиль docs:
+  # в make up, make scenarios и проверку не входит.
+  docs:
+    image: swaggerapi/swagger-ui:v5.17.14
+    profiles: ["docs"]
+    environment:
+      URLS: '[{"url": "./contracts/orders.yaml", "name": "Orders"}, {"url": "./contracts/payment.yaml", "name": "Payment"}, {"url": "./contracts/inventory.yaml", "name": "Inventory"}]'
+      URLS_PRIMARY_NAME: Orders
+      # Без внешнего валидатора: страница не ходит в интернет.
+      VALIDATOR_URL: "none"
+    volumes:
+      - ./contracts:/usr/share/nginx/html/contracts:ro
+    ports:
+      - "127.0.0.1:${DOCS_PORT:-8091}:8080"
+
+networks:
+  default:
+  admin:
+    internal: true

@@ -1,0 +1,149 @@
+name: soa-grade
+# Имя репозитория курса (ippaveln/soa_stand_autumn_2026) — в .etc/config.json;
+# выражения `if:` и `repository:` не читают файлы, поэтому здесь оно повторено
+# ниже (self-test `if:`, checkout `repository:`). Переименовали репозиторий — поменяйте и тут.
+on:
+  push:
+    branches: [master]
+  pull_request_target:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+# Новый push в PR отменяет прогон предыдущего коммита этого PR; push в master — по ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+env:
+  # Адрес аналитики — только здесь (в .etc/config.json его нет).
+  ANALYTICS_URL: https://api.ippaveln.xyz/analytics_industry_backend_go
+jobs:
+  self-test:
+    # Только изменения преподавателя: заглушки, раннер и грейдер собираются и
+    # проходят тесты, наивный пример проходит S1. Для PR из форков пропускается:
+    # код студента вне проверки не запускается.
+    if: ${{ github.repository == 'ippaveln/soa_stand_autumn_2026' && (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l cmd mocks runner examples/go)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: Vet and test course tooling
+        run: |
+          go vet ./cmd/...
+          go test -race ./cmd/...
+          (cd mocks && go vet ./... && go test -race ./...)
+          (cd runner && go vet ./... && go test -race ./...)
+          (cd examples/go && go vet ./...)
+      - name: Naive Go example (orders/) passes S1
+        run: make scenarios ONLY=S1 WAIT=3
+      - name: Naive Python example passes S1
+        run: make scenarios ONLY=S1 WAIT=3 ORDERS_DIR=./examples/python
+      - name: Stop stand
+        if: ${{ always() }}
+        run: make down
+
+  grade:
+    # Официальная проверка PR идёт в репозитории курса, его workflow.
+    # Этот job красный, пока не пройдены все включённые задания (в том числе
+    # до срока следующего). Официальный результат по заданию — check task_N.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CANDIDATE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+      CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: ippaveln/soa_stand_autumn_2026
+          ref: master
+          path: baseline
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: candidate
+          persist-credentials: false
+          # Код форка здесь — только данные: у job токен только на чтение и нет
+          # секретов; из кандидата берётся одна директория orders/, она
+          # собирается и запускается в контейнере стенда.
+          allow-unsafe-pr-checkout: true
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: baseline/go.mod
+          cache: false
+      - name: Grade with instructor stand and scenarios
+        # Заглушки, раннер, compose и сценарии — из baseline; из кандидата — только orders/.
+        working-directory: baseline
+        run: go run ./cmd/grade --baseline . --candidate ../candidate --out ../results
+      - uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() }}
+        with:
+          name: soa-results
+          path: results
+          if-no-files-found: error
+      - name: Deliver analytics
+        # Отчитывается каждый прогон, включая форки; github.workflow_repository
+        # отличает официальную проверку от прогона в форке. Если grade не дошёл
+        # до отчёта, минимальная запись всё равно отмечает попытку.
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          if [ ! -s results/analytics.json ]; then
+            mkdir -p results
+            jq -n \
+              --arg stream "$(jq -r .stream baseline/.etc/config.json 2>/dev/null || true)" \
+              --arg repository "$CANDIDATE_REPOSITORY" --arg sha "$CANDIDATE_SHA" \
+              --arg actor "$GITHUB_ACTOR" --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+              --arg workflow_repository "$GITHUB_REPOSITORY" --arg event "$GITHUB_EVENT_NAME" \
+              '{schema: "github-actions-analytics-v2", stream: $stream, error: "grade did not run",
+                github: {repository: $repository, sha: $sha, actor: $actor, run_id: $run_id, run_attempt: $run_attempt,
+                         workflow_repository: $workflow_repository, event: $event}}' >results/analytics.json
+          fi
+          curl --fail-with-body --connect-timeout 3 --max-time 15 -H 'Content-Type: application/json' --data-binary @results/analytics.json "$ANALYTICS_URL"
+
+  task:
+    needs: grade
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Включённые задания — как в .etc/config.json "tasks".
+        id: ['1']
+    name: task_${{ matrix.id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: ippaveln/soa_stand_autumn_2026
+          ref: master
+          path: baseline
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: baseline/go.mod
+          cache: false
+      - uses: actions/download-artifact@v6
+        with:
+          name: soa-results
+          path: results
+      - name: Require explicit pass and valid file policy
+        env:
+          TASK_ID: ${{ matrix.id }}
+        working-directory: baseline
+        run: go run ./cmd/checkstatus --results ../results --task "task_${TASK_ID}"

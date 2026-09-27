@@ -1,0 +1,1036 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Стенд: заглушки</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --line: #e3e6eb;
+  --accent: #2f6fdb; --accent-text: #ffffff; --ok: #1e7d4f; --ok-bg: #e5f4ec; --warn: #9a6200; --warn-bg: #fdf1dc;
+  --bad: #b42318; --bad-bg: #fde8e6; --hang: #6b4bc4; --hang-bg: #efeafc; --info-bg: #eef2f8;
+  --row-hover: #f2f5fa; --input-bg: #ffffff;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418; --panel: #1a1e24; --text: #e6e9ee; --muted: #9aa3b2; --line: #2b313a;
+    --accent: #6ea1ff; --accent-text: #0d1320; --ok: #5fcf95; --ok-bg: #173226; --warn: #f0b64e; --warn-bg: #3a2c12;
+    --bad: #ff7b6e; --bad-bg: #3d1a17; --hang: #b39dff; --hang-bg: #2a2340; --info-bg: #222a36;
+    --row-hover: #20262e; --input-bg: #111418;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+.wrap { width: 100%; max-width: 1400px; margin: 0 auto; padding: 16px; }
+header { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; margin-bottom: 12px; }
+h1 { font-size: 18px; margin: 0; font-weight: 600; }
+h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
+.label { font-size: 16px; font-weight: 600; }
+.label.empty { color: var(--muted); font-weight: 400; }
+.muted { color: var(--muted); }
+.conn { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; }
+.dot.bad { background: var(--bad); }
+.modes { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 14px; }
+.chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12.5px; background: var(--info-bg); white-space: nowrap; }
+.chip.ok { background: var(--ok-bg); color: var(--ok); }
+.chip.warn { background: var(--warn-bg); color: var(--warn); }
+.chip.bad { background: var(--bad-bg); color: var(--bad); }
+.chip.hang { background: var(--hang-bg); color: var(--hang); }
+.banner { padding: 12px 14px; border-radius: 8px; background: var(--bad-bg); color: var(--bad); margin-bottom: 14px; display: none; }
+.banner code, .note code, .msg code { font-family: var(--mono); }
+.tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.tile .n { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile .t { font-size: 12.5px; color: var(--muted); }
+.tile .s { font-size: 12px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.tile.alarm { border-color: var(--bad); background: var(--bad-bg); }
+.tile.alarm .n, .tile.alarm .t { color: var(--bad); }
+.grid { display: grid; grid-template-columns: minmax(0, 11fr) minmax(0, 9fr); gap: 14px; align-items: start; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+.panel-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
+.panel-head h2 { margin: 0; }
+.panel-head label { margin-left: auto; font-size: 13px; user-select: none; cursor: pointer; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+td.mono { white-space: nowrap; }
+.scroll { max-height: 70vh; overflow: auto; }
+tr.order { cursor: pointer; }
+tr.order:hover { background: var(--row-hover); }
+tr.order.problem td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
+tr.order .caret { display: inline-block; width: 12px; color: var(--muted); }
+tr.tl td { background: var(--bg); padding: 8px 10px 10px 24px; }
+.tl-list { list-style: none; margin: 0; padding: 0; }
+.tl-list li { display: grid; grid-template-columns: 76px 84px minmax(0, 1fr); gap: 8px; padding: 2px 0; align-items: baseline; }
+.tl-list .rel { font-family: var(--mono); font-size: 12px; color: var(--muted); text-align: right; }
+.tl-list .chip { white-space: normal; }
+.svc { font-size: 12px; color: var(--muted); }
+.flags { display: flex; flex-wrap: wrap; gap: 4px; }
+.feed td { white-space: nowrap; }
+.feed td.oc { white-space: normal; }
+.feed td.oc .chip { white-space: normal; }
+.empty-row td { color: var(--muted); text-align: center; padding: 16px; }
+.note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+/* Управление */
+.ctl { margin-bottom: 14px; }
+.ctl > summary { cursor: pointer; font-weight: 600; font-size: 15px; margin-bottom: 8px; user-select: none; }
+.ctl-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 4fr) minmax(0, 5fr); gap: 14px; align-items: start; }
+.form { display: grid; gap: 6px; font-size: 13px; }
+.form label, .inline { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+input[type=number], select { font: inherit; font-size: 13px; color: var(--text); background: var(--input-bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
+input[type=number] { width: 76px; font-variant-numeric: tabular-nums; }
+button { font: inherit; font-size: 13px; color: var(--text); background: var(--info-bg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button:disabled, input:disabled, select:disabled { opacity: .5; cursor: not-allowed; }
+.btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.msg { font-size: 12.5px; margin-top: 6px; min-height: 1em; overflow-wrap: anywhere; }
+.msg.bad { color: var(--bad); }
+.msg.ok { color: var(--ok); }
+.lock-hint { padding: 8px 12px; border-radius: 8px; background: var(--hang-bg); color: var(--hang); margin-bottom: 10px; font-size: 13px; }
+.run-state { margin-top: 8px; font-size: 13px; }
+.run-state b { font-weight: 600; }
+pre.out { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh;
+  overflow: auto; margin: 6px 0 0; background: var(--bg); padding: 8px; border-radius: 6px; }
+.warn-note { color: var(--warn); }
+
+@media (max-width: 1200px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .ctl-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 800px) {
+  .ctl-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .wrap { padding: 16px; }
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tl-list li { grid-template-columns: 64px minmax(0, 1fr); }
+  .tl-list li .svc { display: none; }
+  .scroll { overflow-x: auto; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Стенд: Payment и Inventory</h1>
+    <span id="label" class="label empty">ручной режим</span>
+    <span id="elapsed" class="muted"></span>
+    <span class="conn"><span id="dot" class="dot"></span><span id="conn">загрузка…</span></span>
+  </header>
+
+  <div id="banner" class="banner"></div>
+
+  <div class="modes" id="modes"></div>
+
+  <details class="ctl" id="ctl" open>
+    <summary>Управление стендом</summary>
+    <div id="lock-hint" class="lock-hint" hidden></div>
+    <div class="ctl-grid">
+      <section class="panel">
+        <h2>Режимы Payment</h2>
+        <div class="form">
+          <label>Отвечает 500 на <input id="f-fail" type="number" min="0" max="100" step="1" class="manual"> % запросов</label>
+          <label>Банк отклоняет (402) <input id="f-decline" type="number" min="0" max="100" step="1" class="manual"> % заказов</label>
+          <label>Отвечает через <input id="f-latency" type="number" min="0" max="3600000" step="100" class="manual"> мс</label>
+          <label>Не отвечает <input id="f-bh" type="number" min="0" max="3600" step="1" class="manual"> с, начиная через
+            <input id="f-bh-after" type="number" min="0" max="3600" step="1" class="manual"> с</label>
+          <label>Теряет ответ после списания
+            <select id="f-lost" class="manual">
+              <option value="off">нет</option>
+              <option value="first_per_order">первый ответ по заказу</option>
+              <option value="rate">доля ответов</option>
+            </select>
+            <span id="f-lost-rate-wrap"><input id="f-lost-rate" type="number" min="0" max="100" step="1" class="manual"> %</span></label>
+        </div>
+        <div class="btns">
+          <button id="b-apply" class="manual primary" type="button">Применить</button>
+          <button id="b-off" class="manual" type="button">Убрать все отказы</button>
+          <button id="b-reset" class="manual" type="button" title="POST /admin/reset: журнал фактов и лента начинаются заново, отказы убираются">Очистить журнал</button>
+        </div>
+        <div class="btns" id="presets"><span class="muted">Как в сценарии:</span></div>
+        <div class="msg" id="modes-msg"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Заказы в Orders</h2>
+        <div class="btns"><button id="b-one" class="manual" type="button">Отправить 1 заказ</button></div>
+        <div class="form" style="margin-top:8px">
+          <span class="inline">Отправить <input id="f-n" type="number" min="1" max="500" step="1" value="20" class="manual">
+            заказов с темпом <input id="f-rate" type="number" min="0.1" max="50" step="0.5" value="5" class="manual"> в секунду
+            <button id="b-send" class="manual" type="button">Отправить</button></span>
+        </div>
+        <div class="btns"><button id="b-check" class="manual" type="button">Проверить статусы</button></div>
+        <div class="msg" id="send-msg"></div>
+        <div class="note">Заказы отправляют заглушки, тела — как у раннера. Ответы Orders — в ленте и в таблице заказов;
+          «Проверить статусы» — <code>GET /orders/{id}</code> по этим заказам, колонка «Итог (GET)».</div>
+      </section>
+
+      <section class="panel">
+        <h2>Проверка сценариями</h2>
+        <div class="btns" id="run-btns">
+          <button id="b-run-all" class="run primary" type="button">Прогнать все (S1–S5)</button>
+        </div>
+        <div class="btns">
+          <label class="inline">Пауза после заказов
+            <select id="f-wait" class="run">
+              <option value="30">30 с — как на проверке</option>
+              <option value="5">5 с — быстро, для отладки</option>
+            </select></label>
+        </div>
+        <div class="run-state" id="run-state"></div>
+        <div class="flags" id="run-chips" style="margin-top:6px"></div>
+        <div class="btns"><button id="b-report" type="button" hidden>Отчёт HTML</button><span class="msg" id="run-msg"></span></div>
+        <details id="run-out-wrap" hidden><summary class="muted">Вывод раннера</summary><pre class="out" id="run-out"></pre></details>
+        <div class="note warn-note">Не запускайте <code>make scenarios</code>, пока идёт прогон отсюда: обе проверки ходят
+          в одни и те же заглушки и испортят друг другу результат. Итог прогона пишется и в <code>results/</code>.</div>
+      </section>
+    </div>
+  </details>
+
+  <div class="tiles">
+    <div class="tile"><div class="t">Запросов к Payment</div><div class="n" id="t-req">0</div><div class="s" id="t-req-s"></div></div>
+    <div class="tile"><div class="t">Списаний</div><div class="n" id="t-ch">0</div><div class="s" id="t-ch-s"></div></div>
+    <div class="tile"><div class="t">Заказов со списанием</div><div class="n" id="t-cho">0</div></div>
+    <div class="tile" id="t-dbl-tile"><div class="t">Заказов с 2+ списаниями</div><div class="n" id="t-dbl">0</div></div>
+    <div class="tile"><div class="t">Отказов банка (402)</div><div class="n" id="t-dec">0</div></div>
+    <div class="tile"><div class="t">Резервов</div><div class="n" id="t-res">0</div><div class="s" id="t-res-s"></div></div>
+  </div>
+
+  <div class="grid">
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Заказы</h2>
+        <span class="muted" id="orders-count"></span>
+        <label><input type="checkbox" id="only-problems"> только проблемные</label>
+      </div>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th>order_id</th><th class="num">Запросов к Payment</th><th class="num">Списаний</th>
+            <th class="num">Сумма</th><th>Резерв</th><th>Ответ Orders</th><th>Итог (GET)</th><th>Проблемы</th>
+          </tr></thead>
+          <tbody id="orders"></tbody>
+        </table>
+      </div>
+      <div class="note" id="orders-note">Клик по заказу — всё, что заглушки видели по нему, по времени.</div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Последние запросы</h2><span class="muted" id="feed-count"></span></div>
+      <div class="scroll">
+        <table class="feed">
+          <thead><tr><th>Время</th><th>Сервис</th><th>Запрос</th><th>order_id</th><th>Исход</th></tr></thead>
+          <tbody id="feed"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+'use strict';
+(function () {
+  var FEED_MAX = 200, ORDERS_MAX = 300, ORDERS_KEEP = 3000, SEQ_KEEP = 20000, GRACE_MS = 3000;
+
+  // Открытые параметры сценариев (runner/params): если сервис прогонов не
+  // поднят, кнопки «как в S1…S5» берут эти значения.
+  var PRESETS = {
+    S1: { title: 'Payment работает, часть оплат банк отклоняет (402)', orders: 50, rate_per_s: 10, payment: { decline_rate: 0.1 } },
+    S2: { title: 'Payment отвечает 500 на часть запросов', orders: 50, rate_per_s: 10, payment: { fail_rate: 0.33 } },
+    S3: { title: 'Payment выполняет операцию, но отвечает медленно', orders: 20, rate_per_s: 5, payment: { latency_ms: 2000 } },
+    S4: { title: 'Payment не отвечает, потом поднимается', orders: 50, rate_per_s: 2, payment: { blackhole_s: 60 } },
+    S5: { title: 'Payment выполняет операцию и теряет ответ', orders: 20, rate_per_s: 5, payment: { lost_response: 'first_per_order' } }
+  };
+  var IDS = ['S1', 'S2', 'S3', 'S4', 'S5'];
+
+  var token = (function () {
+    var m = /(?:^#|&)token=([^&]*)/.exec(location.hash);
+    if (!m) return '';
+    try { return decodeURIComponent(m[1]); } catch (e) { return ''; }
+  })();
+
+  var boot = null, run = null, since = 0, offset = 0, last = null, problem = null;
+  var st = fresh();
+  var expanded = new Set();
+
+  function fresh() {
+    return { bySeq: new Map(), seqs: [], orders: new Map(), feed: [], finals: new Map(), checkedAt: 0,
+      feedDirty: true, ordersDirty: true };
+  }
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = String(text);
+    return e;
+  }
+  function parseTime(s) {
+    if (!s) return NaN;
+    return Date.parse(String(s).replace(/(\.\d{3})\d+/, '$1'));
+  }
+  function nowServer() { return Date.now() + offset; }
+  function pct(x) {
+    var v = x * 100;
+    return (v >= 1 || v === 0 ? Math.round(v) : v.toFixed(1)) + ' %';
+  }
+  function secs(ms, digits) { return (ms / 1000).toFixed(digits === undefined ? 1 : digits).replace('.', ',') + ' с'; }
+  function clock(ms) {
+    if (!(ms >= 0)) return '';
+    var s = Math.floor(ms / 1000), m = Math.floor(s / 60), h = Math.floor(m / 60);
+    s %= 60; m %= 60;
+    var mm = (h ? String(m).padStart(2, '0') : String(m)) + ':' + String(s).padStart(2, '0');
+    return h ? h + ':' + mm : mm;
+  }
+  function hms(t) {
+    var d = new Date(t);
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' +
+      String(d.getSeconds()).padStart(2, '0') + '.' + String(d.getMilliseconds()).padStart(3, '0');
+  }
+  function shortId(id) {
+    var r = Array.from(String(id));
+    return r.length > 14 ? r.slice(0, 7).join('') + '…' + r.slice(-6).join('') : r.join('');
+  }
+  function money(c) { return (c / 100).toFixed(2); }
+  function svcName(s) {
+    return s === 'payment' ? 'Payment' : s === 'inventory' ? 'Inventory' : s === 'orders' ? 'Orders' : String(s || '');
+  }
+  function reqText(ev) { return (ev.method || '') + ' ' + (ev.path || ''); }
+  function isManualLabel(text) { return !text || /^ручной режим/.test(text); }
+
+  // Ответ Orders на заказ с дашборда: [текст, тон].
+  function ordersOutcome(ev) {
+    var o = String(ev.outcome || ''), lat = secs(ev.latency_ms || 0, 2);
+    if (o === 'no_response') return ['без ответа за ' + secs(ev.latency_ms || 0, 0), 'bad'];
+    if (o === 'no_connection') return ['нет соединения', 'bad'];
+    if (o === '201') {
+      var s = String(ev.status || '');
+      return ['201 ' + (s || '?') + ' за ' + lat, s === 'paid' ? 'ok' : s === 'rejected' || s === 'pending' ? 'warn' : 'bad'];
+    }
+    return [o + ' за ' + lat, /^5/.test(o) ? 'bad' : 'warn'];
+  }
+
+  // Исход запроса человеческим языком: [текст, тон].
+  function outcome(ev) {
+    if (ev.service === 'orders') return ordersOutcome(ev);
+    var o = String(ev.outcome || ''), done = ev.doneAt != null;
+    var dur = done ? secs(ev.doneAt - ev.t) : '';
+    var gone = ev.final === 'client_closed';
+    if (ev.wait && !done) return ['ждёт ответа', 'hang'];
+    if (o === 'blackhole') return ['без ответа; ' + (gone ? 'Orders закрыл соединение через ' : 'соединение закрыто через ') + dur, 'bad'];
+    var txt = o, tone = '';
+    if (o === 'lost') { txt = 'ответ потерян после списания'; tone = 'bad'; }
+    else if (ev.service === 'payment') {
+      if (o === '201') { txt = '201 · списано'; tone = 'ok'; }
+      else if (o === '200') { tone = 'ok'; }
+      else if (o === '402') { txt = '402 · отказ банка'; tone = 'warn'; }
+      else if (o === '500') { tone = 'bad'; }
+      else { tone = 'warn'; }
+    } else {
+      if (ev.method === 'POST' && o === '201') { txt = '201 · резерв'; tone = 'ok'; }
+      else if (ev.method === 'POST' && o === '200') { txt = '200 · резерв уже есть'; tone = 'ok'; }
+      else if (ev.method === 'DELETE') { txt = o + ' · снятие резерва'; tone = 'ok'; }
+      else if (o === '200') { tone = 'ok'; }
+      else { tone = 'warn'; }
+    }
+    if (ev.wait && done) txt += gone ? ' · Orders закрыл соединение через ' + dur + ', не дождавшись ответа' : ' · ответ через ' + dur;
+    return [txt, tone];
+  }
+
+  function ingest(ev) {
+    if (ev.kind === 'done') {
+      var orig = st.bySeq.get(ev.ref);
+      if (orig) { orig.doneAt = parseTime(ev.at); orig.final = ev.outcome; }
+      st.feedDirty = st.ordersDirty = true;
+      return;
+    }
+    ev.t = parseTime(ev.at);
+    ev.doneAt = null;
+    st.bySeq.set(ev.seq, ev);
+    st.seqs.push(ev.seq);
+    if (st.seqs.length > SEQ_KEEP * 1.2) {
+      st.seqs.splice(0, st.seqs.length - SEQ_KEEP).forEach(function (s) { st.bySeq.delete(s); });
+    }
+    st.feed.push(ev);
+    if (st.feed.length > FEED_MAX * 2) st.feed.splice(0, st.feed.length - FEED_MAX);
+    st.feedDirty = true;
+    if (!ev.order_id) return;
+    var o = st.orders.get(ev.order_id);
+    if (!o) {
+      o = { id: ev.order_id, evs: [], first: ev.t };
+      st.orders.set(ev.order_id, o);
+      if (st.orders.size > ORDERS_KEEP) {
+        var oldest = st.orders.keys().next().value;
+        st.orders.delete(oldest);
+        expanded.delete(oldest);
+      }
+    }
+    o.evs.push(ev);
+    if (ev.t < o.first) o.first = ev.t;
+    st.ordersDirty = true;
+  }
+
+  // Сводка по заказу. Списание засчитывается, когда у запроса есть исход:
+  // сразу или после задержки ответа.
+  function aggregate(o) {
+    var a = { pay: 0, charges: 0, amount: 0, declines: 0, lastDecline: 0, resv: 'none', last: o.first, post: null };
+    o.evs.forEach(function (ev) {
+      var end = ev.doneAt != null ? ev.doneAt : ev.t;
+      if (end > a.last) a.last = end;
+      if (ev.service === 'payment') {
+        a.pay++;
+        if (ev.method === 'POST') {
+          if (ev.charged && (!ev.wait || ev.doneAt != null)) { a.charges++; a.amount += ev.amount_cents || 0; }
+          if (ev.outcome === '402') { a.declines++; a.lastDecline = ev.t; }
+        }
+      } else if (ev.service === 'inventory') {
+        if (ev.method === 'POST' && (ev.outcome === '201' || ev.outcome === '200')) a.resv = 'held';
+        if (ev.method === 'DELETE' && a.resv === 'held') a.resv = 'released';
+      } else if (ev.service === 'orders') {
+        a.post = ev;
+      }
+    });
+    return a;
+  }
+
+  function flags(a) {
+    var f = [], quiet = nowServer() - a.last > GRACE_MS;
+    if (a.charges >= 2) f.push('списаний: ' + a.charges);
+    // Оплата бывает раньше резерва: флаг — только если к концу резерва нет.
+    if (a.charges > 0 && a.resv !== 'held' && quiet) f.push('списание без резерва');
+    if (a.declines > 0 && a.charges === 0 && a.resv === 'held' && nowServer() - a.lastDecline > GRACE_MS) {
+      f.push('резерв держится после 402');
+    }
+    return f;
+  }
+
+  // ---------- запросы к /admin/* ----------
+
+  function api(method, path, body, timeoutMs) {
+    var ctl = new AbortController();
+    var timer = setTimeout(function () { ctl.abort(); }, timeoutMs || 10000);
+    var headers = token ? { 'X-Admin-Token': token } : {};
+    var opt = { method: method, headers: headers, cache: 'no-store', signal: ctl.signal };
+    if (body !== undefined) { headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+    return fetch(path, opt).then(function (r) {
+      return r.text().then(function (t) {
+        clearTimeout(timer);
+        var d = null;
+        try { d = JSON.parse(t); } catch (e) { d = null; }
+        return { status: r.status, ok: r.ok, data: d, text: t };
+      });
+    }, function (e) {
+      clearTimeout(timer);
+      return { status: 0, ok: false, data: null, text: String(e && e.message || e) };
+    });
+  }
+  function errText(res) {
+    if (res.status === 0) return 'заглушки не отвечают';
+    if (res.status === 403) return 'нет доступа: откройте свежую ссылку из make ui';
+    return (res.data && res.data.message) ? String(res.data.message) : 'ошибка ' + res.status;
+  }
+  function say(id, text, tone) {
+    var m = $(id);
+    m.textContent = text || '';
+    m.className = 'msg' + (tone ? ' ' + tone : '');
+  }
+
+  function fetchEvents() {
+    return api('GET', '/admin/events?since=' + since, undefined, 5000).then(function (r) {
+      if (r.status === 403) { var e = new Error('403'); e.auth = true; throw e; }
+      if (!r.ok || !r.data) throw new Error('HTTP ' + r.status);
+      return r.data;
+    });
+  }
+
+  async function poll() {
+    try {
+      for (var i = 0; i < 25; i++) {
+        var d = await fetchEvents();
+        if (d.boot !== boot || d.run !== run) {
+          var restart = boot !== null;
+          boot = d.boot; run = d.run; st = fresh(); expanded.clear();
+          if (restart || since !== 0) { since = 0; continue; }
+        }
+        if (d.truncated) { st = fresh(); expanded.clear(); }
+        offset = parseTime(d.now) - Date.now();
+        last = d;
+        (d.events || []).forEach(ingest);
+        since = d.seq;
+        if (!d.more) break;
+      }
+      problem = null;
+    } catch (e) {
+      problem = e && e.auth ? 'auth' : 'net';
+    }
+    try { render(); } catch (e) { console.error(e); }
+    setTimeout(poll, 1000);
+  }
+
+  // ---------- шапка, плитки, лента, заказы ----------
+
+  function modeChips(d) {
+    var out = [], p = (d && d.modes && d.modes.payment) || {};
+    var now = nowServer();
+    if (p.fail_rate > 0) out.push(['500 на ' + pct(p.fail_rate) + ' запросов', 'bad']);
+    if (p.decline_rate > 0) out.push(['банк отклоняет ' + pct(p.decline_rate) + ' заказов (402)', 'warn']);
+    if (p.latency_ms > 0) out.push(['отвечает через ' + secs(p.latency_ms, p.latency_ms % 1000 ? 1 : 0), 'warn']);
+    if (d && d.blackhole) {
+      var from = parseTime(d.blackhole.from), until = parseTime(d.blackhole.until);
+      if (now < from) out.push(['перестанет отвечать через ' + Math.ceil((from - now) / 1000) + ' с, на ' + secs(until - from, 0), 'warn']);
+      else if (now < until) out.push(['не отвечает: ещё ' + Math.ceil((until - now) / 1000) + ' с', 'hang']);
+      else out.push(['снова отвечает (не отвечал ' + secs(until - from, 0) + ')', 'ok']);
+    }
+    var lr = String(p.lost_response || '');
+    if (lr && lr !== 'off') {
+      var m = /^rate:(.*)$/.exec(lr);
+      out.push([m ? 'теряет ответ после списания: ' + pct(parseFloat(m[1])) + ' ответов' : 'теряет первый ответ по заказу после списания', 'bad']);
+    }
+    if (!out.length) out.push(['работает без отказов', 'ok']);
+    return out;
+  }
+
+  function renderHeader() {
+    var d = last;
+    var lab = $('label');
+    var modes = (d && d.modes) || {};
+    var text = modes.label || '';
+    var manual = isManualLabel(text);
+    lab.textContent = text || 'ручной режим';
+    lab.className = manual ? 'label empty' : 'label';
+    var el2 = $('elapsed');
+    if (!d) el2.textContent = '';
+    else if (modes.finished) el2.textContent = '';
+    else el2.textContent = (manual ? 'с последней смены режимов ' : 'с начала сценария ') + clock(nowServer() - parseTime(d.started_at));
+
+    var box = $('modes');
+    box.textContent = '';
+    box.appendChild(el('span', 'muted', 'Payment:'));
+    modeChips(d).forEach(function (c) { box.appendChild(el('span', 'chip ' + c[1], c[0])); });
+    box.appendChild(el('span', 'muted', ' Inventory:'));
+    box.appendChild(el('span', 'chip ok', 'работает без отказов'));
+
+    var banner = $('banner'), dot = $('dot'), conn = $('conn');
+    banner.textContent = '';
+    if (problem === 'auth') {
+      banner.appendChild(document.createTextNode(token
+        ? 'Токен не подходит: стенд перезапущен с другим токеном. Откройте свежую ссылку из '
+        : 'Нет доступа к данным заглушек. Откройте ссылку из '));
+      banner.appendChild(el('code', '', 'make ui'));
+      banner.appendChild(document.createTextNode(' — в ней токен.'));
+      banner.style.display = 'block';
+      dot.className = 'dot bad'; conn.textContent = 'нет доступа';
+    } else if (problem === 'net') {
+      banner.appendChild(document.createTextNode('Заглушки не отвечают. Стенд запущен? '));
+      banner.appendChild(el('code', '', 'make up'));
+      banner.style.display = 'block';
+      dot.className = 'dot bad'; conn.textContent = 'нет связи';
+    } else {
+      banner.style.display = 'none';
+      dot.className = 'dot'; conn.textContent = 'обновлено ' + hms(Date.now()).slice(0, 8);
+    }
+  }
+
+  function outcomeLabel(k) {
+    switch (k) {
+      case '201': return 'списано';
+      case '402': return 'отказ банка';
+      case 'lost': return 'ответ потерян';
+      case 'blackhole': return 'без ответа';
+      default: return k;
+    }
+  }
+
+  function renderTiles() {
+    var s = last && last.summary;
+    if (!s) return;
+    var p = s.payment || {}, by = p.by_outcome || {};
+    $('t-req').textContent = (p.requests || 0) + (p.gets || 0);
+    var order = ['201', '200', '402', '500', 'lost', 'blackhole', '400', '422'];
+    var keys = Object.keys(by).sort(function (a, b) {
+      var ia = order.indexOf(a), ib = order.indexOf(b);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || (a < b ? -1 : 1);
+    });
+    var parts = keys.map(function (k) { return outcomeLabel(k) + ': ' + by[k]; });
+    var sub = 'POST ' + (p.requests || 0) + (parts.length ? ' (' + parts.join(', ') + ')' : '');
+    if (p.gets) sub += '; GET ' + p.gets + (p.gets_down ? ' (без ответа: ' + p.gets_down + ')' : '');
+    $('t-req-s').textContent = sub;
+    var ch = s.charges || {};
+    $('t-ch').textContent = ch.total || 0;
+    $('t-ch-s').textContent = '';
+    $('t-cho').textContent = ch.orders || 0;
+    $('t-dbl').textContent = ch.double_charged || 0;
+    $('t-dbl-tile').className = 'tile' + (ch.double_charged > 0 ? ' alarm' : '');
+    $('t-dec').textContent = s.declines || 0;
+    var r = s.reservations || {};
+    $('t-res').textContent = (r.held || 0) + (r.released || 0);
+    $('t-res-s').textContent = 'держатся ' + (r.held || 0) + ', сняты ' + (r.released || 0);
+  }
+
+  function renderFeed() {
+    if (!st.feedDirty) return;
+    st.feedDirty = false;
+    var body = $('feed');
+    body.textContent = '';
+    var list = st.feed.slice(-FEED_MAX).reverse();
+    $('feed-count').textContent = list.length ? 'новые сверху, до ' + FEED_MAX : '';
+    if (!list.length) {
+      var tr = el('tr', 'empty-row'), td = el('td', '', 'Запросов пока не было');
+      td.colSpan = 5; tr.appendChild(td); body.appendChild(tr);
+      return;
+    }
+    var frag = document.createDocumentFragment();
+    list.forEach(function (ev) {
+      var tr = el('tr');
+      tr.appendChild(el('td', 'mono', hms(ev.t)));
+      tr.appendChild(el('td', 'svc', svcName(ev.service)));
+      tr.appendChild(el('td', 'mono path', reqText(ev)));
+      var idc = el('td', 'mono', ev.order_id ? shortId(ev.order_id) : '—');
+      if (ev.order_id) idc.title = ev.order_id;
+      tr.appendChild(idc);
+      var oc = outcome(ev), td = el('td', 'oc');
+      td.appendChild(el('span', 'chip ' + oc[1], oc[0]));
+      tr.appendChild(td);
+      frag.appendChild(tr);
+    });
+    body.appendChild(frag);
+  }
+
+  function timeline(o) {
+    var ul = el('ul', 'tl-list');
+    o.evs.slice().sort(function (a, b) { return a.t - b.t || a.seq - b.seq; }).forEach(function (ev) {
+      var li = el('li');
+      li.appendChild(el('span', 'rel', '+' + secs(ev.t - o.first, 3)));
+      li.appendChild(el('span', 'svc', svcName(ev.service)));
+      var main = el('span');
+      main.appendChild(el('span', 'mono', reqText(ev) + ' '));
+      var oc = outcome(ev);
+      main.appendChild(el('span', 'chip ' + oc[1], oc[0]));
+      if (ev.service === 'payment' && ev.method === 'POST' && ev.amount_cents) {
+        main.appendChild(el('span', 'muted', ' сумма ' + money(ev.amount_cents)));
+      }
+      li.appendChild(main);
+      ul.appendChild(li);
+    });
+    var fin = st.finals.get(o.id);
+    if (fin) {
+      var li2 = el('li');
+      li2.appendChild(el('span', 'rel', 'в конце'));
+      li2.appendChild(el('span', 'svc', 'Orders'));
+      var m2 = el('span');
+      m2.appendChild(el('span', 'mono', 'GET /orders/{id} '));
+      m2.appendChild(el('span', 'chip ' + finalTone(fin), 'итог: ' + fin));
+      li2.appendChild(m2);
+      ul.appendChild(li2);
+    }
+    return ul;
+  }
+
+  function finalTone(s) { return s === 'paid' ? 'ok' : s === 'rejected' || s === 'pending' ? 'warn' : 'bad'; }
+
+  var RESV = { none: '—', held: 'держится', released: 'снят' };
+
+  function renderOrders() {
+    var body = $('orders');
+    var onlyBad = $('only-problems').checked;
+    var all = Array.from(st.orders.values());
+    var rows = [], bad = 0;
+    all.forEach(function (o) {
+      o.a = aggregate(o);
+      o.flags = flags(o.a);
+      if (o.flags.length) bad++;
+      if (!onlyBad || o.flags.length) rows.push(o);
+    });
+    rows.sort(function (a, b) { return b.first - a.first; });
+    $('orders-count').textContent = all.length ? all.length + ' · проблемных ' + bad : '';
+    body.textContent = '';
+    if (!rows.length) {
+      var tr0 = el('tr', 'empty-row'), td0 = el('td', '', all.length ? 'Проблемных заказов нет' : 'Заказов пока не было');
+      td0.colSpan = 8; tr0.appendChild(td0); body.appendChild(tr0);
+      return;
+    }
+    var frag = document.createDocumentFragment();
+    rows.slice(0, ORDERS_MAX).forEach(function (o) {
+      var open = expanded.has(o.id), a = o.a;
+      var tr = el('tr', 'order' + (o.flags.length ? ' problem' : ''));
+      var idc = el('td', 'mono');
+      idc.appendChild(el('span', 'caret', open ? '▾' : '▸'));
+      idc.appendChild(document.createTextNode(shortId(o.id)));
+      idc.title = o.id;
+      tr.appendChild(idc);
+      tr.appendChild(el('td', 'num', a.pay));
+      tr.appendChild(el('td', 'num', a.charges));
+      tr.appendChild(el('td', 'num', a.amount ? money(a.amount) : '—'));
+      tr.appendChild(el('td', '', RESV[a.resv]));
+      var pc = el('td');
+      if (a.post) { var po = ordersOutcome(a.post); pc.appendChild(el('span', 'chip ' + po[1], po[0])); } else pc.textContent = '—';
+      tr.appendChild(pc);
+      var fc2 = el('td'), fin = st.finals.get(o.id);
+      if (fin) fc2.appendChild(el('span', 'chip ' + finalTone(fin), fin)); else fc2.textContent = '—';
+      tr.appendChild(fc2);
+      var fc = el('td'), fl = el('div', 'flags');
+      o.flags.forEach(function (f) { fl.appendChild(el('span', 'chip bad', f)); });
+      fc.appendChild(fl);
+      tr.appendChild(fc);
+      tr.addEventListener('click', function () {
+        if (expanded.has(o.id)) expanded.delete(o.id); else expanded.add(o.id);
+        renderOrders();
+      });
+      frag.appendChild(tr);
+      if (open) {
+        var tl = el('tr', 'tl'), td = el('td');
+        td.colSpan = 8;
+        td.appendChild(timeline(o));
+        tl.appendChild(td);
+        frag.appendChild(tl);
+      }
+    });
+    body.appendChild(frag);
+    $('orders-note').textContent = rows.length > ORDERS_MAX
+      ? 'Показаны последние ' + ORDERS_MAX + ' из ' + rows.length + '. Клик по заказу — всё, что заглушки видели по нему, по времени.'
+      : 'Клик по заказу — всё, что заглушки видели по нему, по времени.';
+  }
+
+  // ---------- управление: режимы Payment ----------
+
+  var formDirty = false, formModes = '';
+
+  function numVal(id, min, max, name) {
+    var raw = $(id).value.trim();
+    if (raw === '') return 0;
+    var v = Number(raw.replace(',', '.'));
+    if (!(v >= min && v <= max)) throw new Error(name + ': ожидается ' + min + '…' + max);
+    return v;
+  }
+
+  function readForm() {
+    var p = {
+      fail_rate: numVal('f-fail', 0, 100, 'доля 500') / 100,
+      decline_rate: numVal('f-decline', 0, 100, 'доля отказов банка') / 100,
+      latency_ms: Math.round(numVal('f-latency', 0, 3600000, 'задержка')),
+      blackhole_s: numVal('f-bh', 0, 3600, '«не отвечает»'),
+      blackhole_after_s: numVal('f-bh-after', 0, 3600, '«начиная через»'),
+      lost_response: 'off'
+    };
+    var lost = $('f-lost').value;
+    if (lost === 'first_per_order') p.lost_response = 'first_per_order';
+    if (lost === 'rate') p.lost_response = 'rate:' + (numVal('f-lost-rate', 0, 100, 'доля потерянных ответов') / 100);
+    if (!p.blackhole_s) p.blackhole_after_s = 0;
+    return p;
+  }
+
+  function fillForm(p) {
+    p = p || {};
+    function pc(v) { return v ? String(Math.round(v * 1000) / 10) : ''; }
+    $('f-fail').value = pc(p.fail_rate);
+    $('f-decline').value = pc(p.decline_rate);
+    $('f-latency').value = p.latency_ms ? String(p.latency_ms) : '';
+    $('f-bh').value = p.blackhole_s ? String(p.blackhole_s) : '';
+    $('f-bh-after').value = p.blackhole_after_s ? String(p.blackhole_after_s) : '';
+    var lr = String(p.lost_response || 'off'), m = /^rate:(.*)$/.exec(lr);
+    $('f-lost').value = m ? 'rate' : lr === 'first_per_order' ? 'first_per_order' : 'off';
+    $('f-lost-rate').value = m ? pc(parseFloat(m[1])) : '';
+    syncLost();
+  }
+
+  function syncLost() { $('f-lost-rate-wrap').style.display = $('f-lost').value === 'rate' ? '' : 'none'; }
+
+  // Форма следует за режимами стенда, пока её не начали править.
+  function syncForm() {
+    if (!last || !last.modes) return;
+    var key = JSON.stringify(last.modes.payment || {});
+    var focused = document.activeElement && document.activeElement.closest && document.activeElement.closest('.ctl .form');
+    if (key !== formModes && !formDirty && !focused) {
+      formModes = key;
+      fillForm(last.modes.payment);
+    }
+  }
+
+  function putModes(payment, label) {
+    return api('PUT', '/admin/modes', { label: label, payment: payment }).then(function (r) {
+      if (!r.ok) throw new Error(errText(r));
+      formDirty = false;
+      formModes = JSON.stringify((r.data && r.data.payment) || {});
+      fillForm(r.data && r.data.payment);
+      return r;
+    });
+  }
+
+  function applyForm() {
+    var p;
+    try { p = readForm(); } catch (e) { say('modes-msg', e.message, 'bad'); return; }
+    putModes(p, 'ручной режим').then(function () { say('modes-msg', 'Режимы применены.', 'ok'); refresh(); },
+      function (e) { say('modes-msg', e.message, 'bad'); });
+  }
+
+  function modesOff() {
+    putModes({}, 'ручной режим').then(function () { say('modes-msg', 'Отказов нет: Payment работает штатно.', 'ok'); refresh(); },
+      function (e) { say('modes-msg', e.message, 'bad'); });
+  }
+
+  function resetJournal() {
+    api('POST', '/admin/reset').then(function (r) {
+      if (!r.ok) { say('modes-msg', errText(r), 'bad'); return; }
+      formDirty = false; formModes = '';
+      say('modes-msg', 'Журнал очищен, отказы убраны.', 'ok');
+      refresh();
+    });
+  }
+
+  function applyPreset(id) {
+    var ps = PRESETS[id];
+    if (!ps) return;
+    var pm = Object.assign({}, ps.payment || {});
+    putModes(pm, 'ручной режим · как в ' + id).then(function () {
+      if (ps.orders) $('f-n').value = String(Math.min(ps.orders, 500));
+      if (ps.rate_per_s) $('f-rate').value = String(ps.rate_per_s);
+      var hint = id + ': режимы выставлены; «Отправить» — ' + ps.orders + ' заказов с темпом ' + ps.rate_per_s + ' в секунду, как в сценарии.';
+      if (ps.orders_after) hint += ' В сценарии после подъёма Payment — ещё ' + ps.orders_after + ' заказов.';
+      say('modes-msg', hint, 'ok');
+      refresh();
+    }, function (e) { say('modes-msg', e.message, 'bad'); });
+  }
+
+  function buildPresets() {
+    var box = $('presets');
+    Array.from(box.querySelectorAll('button')).forEach(function (b) { box.removeChild(b); });
+    IDS.forEach(function (id) {
+      var ps = PRESETS[id];
+      if (!ps) return;
+      var b = el('button', 'manual', id);
+      b.type = 'button';
+      b.title = id + ' · ' + (ps.title || '') + ': режимы Payment и темп заказов как в сценарии';
+      b.addEventListener('click', function () { applyPreset(id); });
+      box.appendChild(b);
+    });
+  }
+
+  // ---------- управление: заказы ----------
+
+  function sendOrders(count, rate) {
+    api('POST', '/admin/orders', { count: count, rate_per_s: rate }).then(function (r) {
+      if (!r.ok) { say('send-msg', errText(r), 'bad'); return; }
+      say('send-msg', count === 1 ? 'Заказ отправлен: ответ появится в ленте.' : 'Отправка началась.', 'ok');
+      refresh();
+    });
+  }
+
+  function sendMany() {
+    var n, rate;
+    try {
+      n = numVal('f-n', 1, 500, 'число заказов');
+      rate = numVal('f-rate', 0.1, 50, 'темп');
+    } catch (e) { say('send-msg', e.message, 'bad'); return; }
+    if (!n || !rate) { say('send-msg', 'Укажите число заказов и темп.', 'bad'); return; }
+    sendOrders(Math.round(n), rate);
+  }
+
+  function checkStatuses() {
+    say('send-msg', 'Проверяю статусы…');
+    api('POST', '/admin/orders/check', undefined, 60000).then(function (r) {
+      if (!r.ok || !r.data) { say('send-msg', errText(r), 'bad'); return; }
+      var m = new Map(), counts = {};
+      Object.keys(r.data.statuses || {}).forEach(function (k) {
+        var v = String(r.data.statuses[k]);
+        m.set(k, v);
+        counts[v] = (counts[v] || 0) + 1;
+      });
+      st.finals = m; st.checkedAt = Date.now(); st.ordersDirty = true;
+      var parts = Object.keys(counts).sort().map(function (k) { return k + ': ' + counts[k]; });
+      say('send-msg', m.size ? 'Итог GET /orders/{id} (' + hms(Date.now()).slice(0, 8) + '): ' + parts.join(', ')
+        : 'Заказов с дашборда в этом журнале нет.', m.size ? 'ok' : '');
+      renderOrders();
+    });
+  }
+
+  // ---------- проверка сценариями (runner-ui) ----------
+
+  var runner = { avail: null, st: null, paramsLoaded: false, timer: null };
+
+  function pollRunner() {
+    clearTimeout(runner.timer);
+    api('GET', '/admin/runner/status', undefined, 8000).then(function (r) {
+      if (r.ok && r.data) {
+        runner.avail = true; runner.st = r.data; runner.err = '';
+        if (!runner.paramsLoaded) loadParams();
+      } else {
+        runner.avail = false; runner.st = null; runner.err = errText(r);
+      }
+      renderRunner();
+      var delay = runner.avail ? (runner.st.state === 'running' ? 1500 : 5000) : 15000;
+      runner.timer = setTimeout(pollRunner, delay);
+    });
+  }
+
+  function loadParams() {
+    runner.paramsLoaded = true;
+    api('GET', '/admin/runner/params').then(function (r) {
+      if (!r.ok || !r.data || !r.data.scenarios) { runner.paramsLoaded = false; return; }
+      IDS.forEach(function (id) { if (r.data.scenarios[id]) PRESETS[id] = r.data.scenarios[id]; });
+      buildPresets();
+      renderLock();
+    });
+  }
+
+  function startRun(only) {
+    var wait = Number($('f-wait').value);
+    say('run-msg', 'Запускаю…');
+    api('POST', '/admin/runner/run', { only: only, wait: wait }).then(function (r) {
+      if (!r.ok) { say('run-msg', errText(r), 'bad'); pollRunner(); return; }
+      say('run-msg', '');
+      runner.avail = true; runner.st = r.data;
+      renderRunner();
+      pollRunner();
+    });
+  }
+
+  function openReport() {
+    api('GET', '/admin/runner/report', undefined, 15000).then(function (r) {
+      if (!r.ok) { say('run-msg', errText(r), 'bad'); return; }
+      var url = URL.createObjectURL(new Blob([r.text], { type: 'text/html' }));
+      var a = el('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+    });
+  }
+
+  function running() { return !!(runner.st && runner.st.state === 'running'); }
+  function sendingActive() { return !!(last && last.sending && last.sending.active); }
+
+  function renderRunner() {
+    var s = runner.st, box = $('run-state'), chips = $('run-chips');
+    box.textContent = ''; chips.textContent = '';
+    $('b-report').hidden = !(s && s.report);
+    var out = $('run-out'), wrap = $('run-out-wrap');
+    if (!runner.avail) {
+      box.appendChild(el('span', 'muted', runner.avail === null ? 'Проверяю, запущен ли сервис прогонов…' : ''));
+      if (runner.avail === false) {
+        var c = el('code', '', 'make ui');
+        box.appendChild(document.createTextNode('Прогоны отсюда недоступны: сервис прогонов не запущен. Запустите '));
+        box.appendChild(c);
+        box.appendChild(document.createTextNode(' — он поднимает сервис прогонов.'));
+      }
+      wrap.hidden = true;
+      renderLock();
+      return;
+    }
+    if (!s || s.state === 'idle') {
+      box.appendChild(el('span', 'muted', 'Прогонов из дашборда ещё не было.'));
+    } else {
+      var started = parseTime(s.started_at);
+      if (s.state === 'running') {
+        var cur = (s.scenarios || []).filter(function (x) { return x.state === 'running'; })[0];
+        box.appendChild(el('b', '', cur ? 'Идёт ' + cur.id + ' · ' + cur.title : 'Проверяю, что стенд отвечает…'));
+        box.appendChild(el('span', 'muted', ' · прогон идёт ' + clock(Date.now() - started) + ', пауза после заказов ' + s.wait_s + ' с'));
+      } else {
+        var t = el('b', '', s.results && s.results.error ? 'Стенд: ' + s.results.error : 'Прошло ' + s.passed + ' из ' + s.total);
+        box.appendChild(t);
+        if (s.level) box.appendChild(el('span', '', ' · уровень: ' + s.level));
+        var fin = parseTime(s.finished_at);
+        if (fin >= 0) box.appendChild(el('span', 'muted', ' · закончен в ' + hms(fin).slice(0, 8) + ', пауза ' + s.wait_s + ' с'));
+      }
+      (s.scenarios || []).forEach(function (x) {
+        var map = { pending: ['ждёт', ''], running: ['идёт', 'hang'], pass: ['PASS', 'ok'], fail: ['FAIL', 'bad'] };
+        var m = map[x.state] || [x.state, ''];
+        var chip = el('span', 'chip ' + m[1], x.id + ' ' + m[0]);
+        chip.title = x.title + (x.error ? ': ' + x.error : '');
+        chips.appendChild(chip);
+      });
+    }
+    var text = (s && s.text) || '';
+    wrap.hidden = !text;
+    if (out.textContent !== text) {
+      var atBottom = out.scrollTop + out.clientHeight >= out.scrollHeight - 4;
+      out.textContent = text;
+      if (atBottom) out.scrollTop = out.scrollHeight;
+    }
+    renderLock();
+  }
+
+  function renderLock() {
+    var busy = running(), hint = $('lock-hint');
+    hint.hidden = !busy;
+    hint.textContent = busy
+      ? 'Идёт прогон сценариев: ручные кнопки недоступны — ручные режимы и заказы испортили бы проверку. Дождитесь конца прогона.'
+      : '';
+    Array.from(document.querySelectorAll('.manual')).forEach(function (e) { e.disabled = busy; });
+    var noOrders = !!(last && last.orders_enabled === false);
+    ['b-one', 'b-send', 'b-check'].forEach(function (id) { if (noOrders) $(id).disabled = true; });
+    if (noOrders && !$('send-msg').textContent) say('send-msg', 'Заглушкам не задан адрес Orders (ORDERS_URL): отправка недоступна.', 'bad');
+    var sending = sendingActive();
+    Array.from(document.querySelectorAll('.run')).forEach(function (e) { e.disabled = !runner.avail || busy || sending; });
+    if (sending && !busy) {
+      var sd = last.sending;
+      say('send-msg', 'Отправка: ' + sd.sent + ' из ' + sd.total + ', ответов ' + sd.done + '. Прогоны сценариев — после её конца.');
+    }
+  }
+
+  function buildRunButtons() {
+    var box = $('run-btns');
+    IDS.forEach(function (id) {
+      var b = el('button', 'run', id);
+      b.type = 'button';
+      b.title = 'Прогнать только ' + id + (PRESETS[id] ? ' · ' + PRESETS[id].title : '');
+      b.addEventListener('click', function () { startRun(id); });
+      box.appendChild(b);
+    });
+    $('b-run-all').addEventListener('click', function () { startRun(IDS.join(',')); });
+  }
+
+  var lastSendingActive = false;
+  function render() {
+    renderHeader();
+    renderTiles();
+    renderFeed();
+    renderOrders();
+    syncForm();
+    var sa = sendingActive();
+    if (lastSendingActive && !sa && last && last.sending) {
+      var sd = last.sending;
+      say('send-msg', 'Отправлено ' + sd.total + ', ответов ' + sd.done + '. Итоги — «Проверить статусы».', 'ok');
+    }
+    lastSendingActive = sa;
+    renderLock();
+  }
+
+  var refreshTimer = null;
+  function refresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(function () { try { render(); } catch (e) { console.error(e); } }, 50); }
+
+  $('only-problems').addEventListener('change', renderOrders);
+  Array.from(document.querySelectorAll('.ctl .form input, .ctl .form select')).forEach(function (e) {
+    if (e.id === 'f-n' || e.id === 'f-rate') return;
+    e.addEventListener('input', function () { formDirty = true; });
+  });
+  $('f-lost').addEventListener('change', syncLost);
+  $('b-apply').addEventListener('click', applyForm);
+  $('b-off').addEventListener('click', modesOff);
+  $('b-reset').addEventListener('click', resetJournal);
+  $('b-one').addEventListener('click', function () { sendOrders(1, 1); });
+  $('b-send').addEventListener('click', sendMany);
+  $('b-check').addEventListener('click', checkStatuses);
+  $('b-report').addEventListener('click', openReport);
+  window.addEventListener('hashchange', function () { location.reload(); });
+  buildPresets();
+  buildRunButtons();
+  syncLost();
+  render();
+  poll();
+  pollRunner();
+})();
+</script>
+</body>
+</html>
