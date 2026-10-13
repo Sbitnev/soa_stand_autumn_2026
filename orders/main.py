@@ -1,19 +1,17 @@
 """Orders: оформление заказа, устойчивое к отказам Payment.
 
-Идея в трёх пунктах:
-1. Заказ сначала записывается в Postgres как `pending` и только потом идёт в
-   Payment. Если процесс упадёт, заказ не потеряется: его подберёт воркер.
-2. Каждый запрос в Payment идёт с `Idempotency-Key = id заказа`. Поэтому
-   повторять его можно сколько угодно: деньги второй раз не спишутся.
-3. POST /orders ждёт не дольше FAST_BUDGET. Не успели -- отвечаем `pending`,
-   а доделывает фоновый воркер. Если Payment лежит, circuit breaker не даёт
-   слать ему запросы на каждый заказ.
+Схема простая:
+1. POST /orders только записывает заказ в Postgres со статусом `pending` и сразу
+   отвечает. Во внешние сервисы он не ходит, поэтому отвечает быстро всегда.
+2. Фоновые воркеры берут `pending`-заказы из БД и доводят их до `paid` / `rejected`.
+   Не получилось (ошибка, таймаут, обрыв) -- заказ остаётся `pending` и берётся снова.
+3. Каждый запрос в Payment идёт с `Idempotency-Key = id заказа`: повторять можно
+   сколько угодно, деньги второй раз не спишутся.
 """
 import asyncio
 import json
 import logging
 import os
-import random
 import time
 import uuid
 
@@ -32,11 +30,12 @@ PAYMENT_URL = os.environ["PAYMENT_URL"].rstrip("/")
 INVENTORY_URL = os.environ["INVENTORY_URL"].rstrip("/")
 DATABASE_URL = os.environ["DATABASE_URL"]
 
-FAST_BUDGET = 0.7      # сек на всю быструю попытку в POST /orders (лимит раннера -- 1 с)
-REQUEST_TIMEOUT = 5.0  # сек на один запрос в фоне: должно хватать на медленный, но живой Payment
-LEASE = 15             # сек: на столько воркер "занимает" заказ, пока обрабатывает его
-POLL_INTERVAL = 0.5    # как часто воркер заглядывает в БД
-BATCH = 20             # сколько заказов воркер берёт за раз
+WORKERS = 5            # сколько заказов обрабатывается одновременно
+REQUEST_TIMEOUT = 5.0  # сек на один внешний запрос (без таймаута воркер зависнет вместе с Payment)
+RETRY_DELAY = 2        # сек до повторной попытки неудавшегося заказа
+LEASE = 30             # сек: на столько воркер "занимает" заказ (защита от падения посреди обработки)
+PAYMENT_PAUSE = 10.0   # сек не ходим в Payment после таймаута
+POLL_INTERVAL = 0.5    # сек: пауза воркера, когда заказов нет
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS orders (
@@ -46,133 +45,99 @@ CREATE TABLE IF NOT EXISTS orders (
     amount_cents    BIGINT NOT NULL,
     items           JSONB NOT NULL,
     declined        BOOLEAN NOT NULL DEFAULT false, -- банк сказал 402, резерв ещё не снят
-    attempts        INT NOT NULL DEFAULT 0,
-    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS orders_pending_idx ON orders (next_attempt_at) WHERE status = 'pending';
 """
 
 pool: asyncpg.Pool
 http: httpx.AsyncClient
 
 
-# ---------------------------------------------------------------- circuit breaker
+# ---------------------------------------------------------------- защита Payment
+# Если Payment не отвечает (таймаут), на PAYMENT_PAUSE секунд перестаём туда ходить.
+# Когда пауза прошла, пускаем ОДИН пробный запрос: ответил -- работаем дальше,
+# снова молчит -- ещё пауза. Так лежащий Payment не получает запрос на каждый заказ.
 
-class Breaker:
-    """Защита Payment: после FAIL_LIMIT неудач подряд перестаём слать запросы.
+down_until = None  # None -- Payment отвечает; иначе момент, до которого в него не ходим
+probing = False    # идёт ли сейчас пробный запрос
 
-    "Неудача" здесь -- только когда Payment НЕ ОТВЕЧАЕТ: таймаут или нет
-    соединения. Явный ответ (даже 500) или обрыв соединения после приёма
-    запроса значит, что Payment жив: такой заказ просто повторится позже
-    с паузой (retry_later), а общий выключатель не нужен.
 
-    Пока "открыт" -- запросы не идут вообще. Когда пауза прошла, пропускаем
-    ровно один пробный запрос. Успех -- закрываемся, неудача -- открываемся
-    снова на вдвое более долгую паузу (до MAX_COOLDOWN).
-    """
-    FAIL_LIMIT = 3
-    BASE_COOLDOWN = 5.0
-    MAX_COOLDOWN = 10.0
-
-    def __init__(self):
-        self.failures = 0
-        self.open_until = 0.0
-        self.cooldown = self.BASE_COOLDOWN
-        self.probing = False
-
-    def allow(self) -> bool:
-        if time.monotonic() < self.open_until:
-            return False
-        if self.failures >= self.FAIL_LIMIT:  # пауза прошла: один пробный запрос
-            if self.probing:
-                return False
-            self.probing = True
+def payment_allowed() -> bool:
+    global probing
+    if down_until is None:
         return True
-
-    def success(self):
-        self.failures = 0
-        self.cooldown = self.BASE_COOLDOWN
-        self.open_until = 0.0
-        self.probing = False
-
-    def failure(self):
-        self.failures += 1
-        self.probing = False
-        if self.failures >= self.FAIL_LIMIT:
-            self.open_until = time.monotonic() + self.cooldown
-            self.cooldown = min(self.cooldown * 2, self.MAX_COOLDOWN)
-            log.warning("breaker открыт на %.0f с", self.open_until - time.monotonic())
+    if time.monotonic() < down_until or probing:
+        return False
+    probing = True  # пауза прошла: пускаем один пробный запрос
+    return True
 
 
-breaker = Breaker()
+def payment_alive():
+    global down_until, probing
+    down_until, probing = None, False
+
+
+def payment_down():
+    global down_until, probing
+    down_until, probing = time.monotonic() + PAYMENT_PAUSE, False
+    log.warning("Payment не отвечает, пауза %.0f с", PAYMENT_PAUSE)
 
 
 # ---------------------------------------------------------------- вызовы внешних сервисов
 
-async def reserve(o: dict, timeout: float) -> bool:
-    """Резерв в Inventory. Повторный вызов безопасен (вернёт 200, а не новый резерв)."""
+async def reserve(o: dict) -> bool:
+    """Резерв в Inventory. Повторный вызов безопасен: вернёт 200 с тем же резервом."""
     items = [{"sku": i["sku"], "qty": i["qty"]} for i in o["items"]]
     try:
-        r = await http.post(f"{INVENTORY_URL}/reservations", timeout=timeout,
-                            json={"order_id": o["id"], "items": items})
+        r = await http.post(f"{INVENTORY_URL}/reservations", json={"order_id": o["id"], "items": items})
     except httpx.HTTPError as e:
         log.warning("резерв %s: %r", o["id"], e)
         return False
     return r.status_code in (200, 201)
 
 
-async def release(o: dict, timeout: float) -> bool:
-    """Снять резерв. Повтор безопасен (Inventory всегда отвечает 204)."""
+async def release(o: dict) -> bool:
+    """Снять резерв. Повторный вызов безопасен: Inventory всегда отвечает 204."""
     try:
-        r = await http.delete(f"{INVENTORY_URL}/reservations/{o['id']}", timeout=timeout)
+        r = await http.delete(f"{INVENTORY_URL}/reservations/{o['id']}")
     except httpx.HTTPError as e:
         log.warning("снятие резерва %s: %r", o["id"], e)
         return False
     return r.status_code in (200, 204)
 
 
-async def charge(o: dict, timeout: float) -> str:
+async def charge(o: dict) -> str:
     """Списание в Payment. Возвращает:
     paid     -- деньги списаны (201) или уже были списаны ранее с этим ключом (200);
     declined -- банк отказал (402), деньги не списаны, повторять не надо;
-    failed   -- 500 / таймаут / обрыв: деньги не списаны ИЛИ неизвестно, повторим с тем же ключом;
-    skip     -- не стали обращаться (breaker открыт или не осталось времени).
+    retry    -- не знаем исход или деньги не списаны: попробуем позже с тем же ключом.
     """
-    if timeout < 0.05 or not breaker.allow():
-        return "skip"
+    if not payment_allowed():
+        return "retry"
     try:
         r = await http.post(
-            f"{PAYMENT_URL}/payments", timeout=timeout,
+            f"{PAYMENT_URL}/payments",
             # Ключ = id заказа: повтор вернёт тот же результат, а не новое списание.
             headers={"Idempotency-Key": o["id"]},
             json={"order_id": o["id"], "amount_cents": o["amount_cents"], "currency": "RUB"},
         )
     except (httpx.TimeoutException, httpx.ConnectError) as e:
-        # Payment не отвечает вовремя / недоступен. Деньги могли списаться --
-        # узнаем повтором с тем же ключом. Это сигнал для breaker.
         log.warning("платёж %s: %r", o["id"], e)
-        breaker.failure()
-        return "failed"
+        payment_down()  # Payment молчит или недоступен
+        return "retry"
     except httpx.HTTPError as e:
-        # Соединение оборвано без ответа (потерянный ответ): Payment жив, но
-        # результат неизвестен. Повторим с тем же ключом; breaker не трогаем.
+        # Обрыв без ответа: операция могла выполниться (потерянный ответ), но
+        # Payment жив. Повторим с тем же ключом -- вернётся результат первой попытки.
         log.warning("платёж %s: %r", o["id"], e)
-        breaker.success()
-        return "failed"
-    except BaseException:
-        breaker.probing = False  # отмена задачи: не оставляем breaker с "висящей" пробой
-        raise
+        payment_alive()
+        return "retry"
+    payment_alive()  # получили ответ -- Payment жив
     if r.status_code in (200, 201):
-        breaker.success()
         return "paid"
     if r.status_code == 402:
-        breaker.success()  # Payment жив и отвечает
         return "declined"
-    # 500 и прочее: Payment ответил, значит жив; деньги не списаны, повторим позже.
-    log.warning("платёж %s: код %s", o["id"], r.status_code)
-    breaker.success()
-    return "failed"
+    log.warning("платёж %s: код %s", o["id"], r.status_code)  # 500: деньги не списаны
+    return "retry"
 
 
 # ---------------------------------------------------------------- обработка заказа
@@ -181,81 +146,56 @@ async def set_status(order_id: str, status: str):
     await pool.execute("UPDATE orders SET status = $2 WHERE id = $1", order_id, status)
 
 
-async def retry_later(order_id: str, failed: bool):
-    """Оставляем заказ pending и назначаем время следующей попытки.
-
-    failed=True -- была реальная неудача: увеличиваем счётчик и ждём дольше
-    (экспоненциально, с разбросом, потолок 10 с). failed=False -- просто не
-    дошли до Payment (breaker): через секунду посмотрим снова.
-    """
-    if failed:
-        n = await pool.fetchval("SELECT attempts FROM orders WHERE id = $1", order_id)
-        delay = min(2 ** (n or 0), 10) * (0.5 + random.random())
-    else:
-        delay = 1.0
+async def retry_later(order_id: str):
+    """Оставляем заказ pending: воркер возьмёт его снова через RETRY_DELAY секунд."""
     await pool.execute(
-        "UPDATE orders SET attempts = attempts + $3, "
-        "next_attempt_at = now() + make_interval(secs => $2) "
-        "WHERE id = $1 AND status = 'pending'",
-        order_id, delay, 1 if failed else 0)
+        "UPDATE orders SET next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1",
+        order_id, float(RETRY_DELAY))
 
 
-async def process(o: dict, budget: float) -> str:
-    """Один проход по заказу. Возвращает статус: paid / rejected / pending.
-
-    Вызывается и из POST /orders (budget маленький), и из воркера (budget большой).
-    Безопасно вызывать повторно, на любом шаге: все внешние вызовы идемпотентны,
-    а что уже сделано, записано в БД.
-    """
-    deadline = time.monotonic() + budget
-
-    def left() -> float:
-        return min(deadline - time.monotonic(), REQUEST_TIMEOUT)
-
+async def process(o: dict):
+    """Один проход по заказу. Безопасно повторять на любом шаге: внешние вызовы
+    идемпотентны, а что уже сделано -- записано в БД. Если что-то не вышло,
+    заказ остаётся pending и будет взят снова."""
     try:
         if not o["declined"]:
-            # Шаг 1: резерв.
-            if not await reserve(o, left()):
-                await retry_later(o["id"], failed=True)
-                return "pending"
-            # Шаг 2: деньги.
-            result = await charge(o, left())
+            if not await reserve(o):
+                return await retry_later(o["id"])
+            result = await charge(o)
             if result == "paid":
-                await set_status(o["id"], "paid")
-                return "paid"
-            if result != "declined":
-                await retry_later(o["id"], failed=(result == "failed"))
-                return "pending"
+                return await set_status(o["id"], "paid")
+            if result == "retry":
+                return await retry_later(o["id"])
             # 402: запоминаем отказ в БД ДО снятия резерва. Если упадём между
             # ними, воркер увидит declined=true и только снимет резерв.
             await pool.execute("UPDATE orders SET declined = true WHERE id = $1", o["id"])
-        # Шаг 3 (только после 402): снять резерв. rejected ставим лишь после
-        # успешного DELETE -- иначе "rejected" означал бы резерв, висящий на складе.
-        if await release(o, left()):
+        # rejected ставим лишь после успешного снятия резерва, иначе "rejected"
+        # означал бы резерв, который висит на складе.
+        if await release(o):
             await set_status(o["id"], "rejected")
-            return "rejected"
-        await retry_later(o["id"], failed=True)
+        else:
+            await retry_later(o["id"])
     except Exception:
-        log.exception("process %s", o["id"])
-    return "pending"
+        log.exception("process %s", o["id"])  # заказ вернётся сам, когда истечёт LEASE
 
 
 async def worker():
-    """Фон: берёт из БД заказы pending, чьё время пришло, и доводит их до конца."""
+    """Берёт из БД по одному pending-заказу, чьё время пришло, и обрабатывает."""
     while True:
         try:
-            # "Занимаем" заказы: сдвигаем next_attempt_at на LEASE секунд вперёд,
-            # чтобы их не взяли повторно, пока мы заняты. Если процесс упадёт --
-            # через LEASE секунд заказ снова станет доступен.
-            rows = await pool.fetch(
+            # Одним запросом выбираем заказ и "занимаем" его: сдвигаем next_attempt_at
+            # на LEASE секунд вперёд, чтобы другой воркер его не взял. Если процесс
+            # упадёт -- через LEASE секунд заказ снова станет доступен.
+            # FOR UPDATE SKIP LOCKED: воркеры не ждут друг друга и не берут один заказ.
+            row = await pool.fetchrow(
                 "UPDATE orders SET next_attempt_at = now() + make_interval(secs => $1) "
-                "WHERE id IN (SELECT id FROM orders WHERE status = 'pending' AND next_attempt_at <= now() "
-                "             ORDER BY next_attempt_at LIMIT $2 FOR UPDATE SKIP LOCKED) "
+                "WHERE id = (SELECT id FROM orders WHERE status = 'pending' AND next_attempt_at <= now() "
+                "            ORDER BY next_attempt_at LIMIT 1 FOR UPDATE SKIP LOCKED) "
                 "RETURNING id, amount_cents, items, declined",
-                float(LEASE), BATCH)
-            orders = [{**dict(r), "items": json.loads(r["items"])} for r in rows]
-            if orders:
-                await asyncio.gather(*(process(o, LEASE - 3) for o in orders))
+                float(LEASE))
+            if row:
+                await process({**dict(row), "items": json.loads(row["items"])})
+                continue
         except Exception:
             log.exception("worker")
         await asyncio.sleep(POLL_INTERVAL)
@@ -286,10 +226,11 @@ async def lifespan(_: FastAPI):
             await asyncio.sleep(1)
     else:
         raise RuntimeError("база недоступна")
-    http = httpx.AsyncClient()
-    task = asyncio.create_task(worker())
+    http = httpx.AsyncClient(timeout=REQUEST_TIMEOUT)
+    tasks = [asyncio.create_task(worker()) for _ in range(WORKERS)]
     yield
-    task.cancel()
+    for t in tasks:
+        t.cancel()
     await http.aclose()
     await pool.close()
 
@@ -313,16 +254,11 @@ async def create_order(req: OrderRequest):
     order_id = str(uuid.uuid4())
     items = [i.model_dump() for i in req.items]
     amount = sum(i["qty"] * i["price_cents"] for i in items)
-    # Сначала в БД. next_attempt_at +3 с: пока идёт быстрая попытка ниже,
-    # воркер этот заказ не трогает; не успеем -- он подберёт его сам.
+    # Только запись в БД: дальше заказ подхватит воркер.
     await pool.execute(
-        "INSERT INTO orders (id, user_id, status, amount_cents, items, next_attempt_at) "
-        "VALUES ($1, $2, 'pending', $3, $4, now() + interval '3 seconds')",
+        "INSERT INTO orders (id, user_id, status, amount_cents, items) VALUES ($1, $2, 'pending', $3, $4)",
         order_id, req.user_id, amount, json.dumps(items))
-    order = {"id": order_id, "amount_cents": amount, "items": items, "declined": False}
-    status = await process(order, FAST_BUDGET)
-    log.info("order %s: %s", order_id, status)
-    return {"id": order_id, "status": status}
+    return {"id": order_id, "status": "pending"}
 
 
 @app.get("/orders/{order_id}")
