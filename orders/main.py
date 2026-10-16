@@ -28,6 +28,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 PAYMENT_URL = os.environ["PAYMENT_URL"].rstrip("/")
 INVENTORY_URL = os.environ["INVENTORY_URL"].rstrip("/")
+EVENTS_URL = os.environ["EVENTS_URL"].rstrip("/")
 DATABASE_URL = os.environ["DATABASE_URL"]
 
 WORKERS = 5            # сколько заказов обрабатывается одновременно
@@ -36,6 +37,9 @@ RETRY_DELAY = 2        # сек до повторной попытки неуд�
 LEASE = 30             # сек: на столько воркер "занимает" заказ (защита от падения посреди обработки)
 PAYMENT_PAUSE = 10.0   # сек не ходим в Payment после таймаута
 POLL_INTERVAL = 0.5    # сек: пауза воркера, когда заказов нет
+BUS_TIMEOUT = 3.0      # сек на один запрос к шине (она может висеть до конца отказа)
+PUBLISH_BATCH = 20     # сколько событий отправляем за один цикл, параллельно
+PUBLISH_INTERVAL = 1.0 # сек между циклами публикатора
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS orders (
@@ -45,12 +49,22 @@ CREATE TABLE IF NOT EXISTS orders (
     amount_cents    BIGINT NOT NULL,
     items           JSONB NOT NULL,
     declined        BOOLEAN NOT NULL DEFAULT false, -- банк сказал 402, резерв ещё не снят
-    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    event_sent      BOOLEAN NOT NULL DEFAULT false  -- событие order.paid принято шиной
 );
+-- Журнал начислений бонусов: одна строка на одно событие доставки. PRIMARY KEY по id
+-- события не даст начислить дважды, а баланс -- это сумма строк пользователя.
+CREATE TABLE IF NOT EXISTS bonus_events (
+    id      TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    points  BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bonus_events_user ON bonus_events (user_id);
 """
 
 pool: asyncpg.Pool
 http: httpx.AsyncClient
+bus: httpx.AsyncClient  # отдельный клиент для шины: её зависшие запросы не занимают соединения Payment
 
 
 # ---------------------------------------------------------------- защита Payment
@@ -201,6 +215,38 @@ async def worker():
         await asyncio.sleep(POLL_INTERVAL)
 
 
+# ---------------------------------------------------------------- публикация order.paid
+# Событие "ждёт отправки" -- это сама строка заказа: status='paid' AND event_sent=false.
+# Статус paid пишется одной командой UPDATE, поэтому "оплачен" и "событие ждёт" возникают
+# вместе: потерять событие между ними нельзя. Публикатор отправляет и только потом ставит
+# event_sent=true. Упали между отправкой и отметкой -- после рестарта отправим ещё раз
+# с тем же id (id события = id заказа), шина и подписчики отличат копию по id.
+
+async def publish(order_id: str):
+    try:
+        r = await bus.post(f"{EVENTS_URL}/events",
+                           json={"id": order_id, "type": "order.paid", "order_id": order_id})
+    except httpx.HTTPError as e:
+        log.warning("событие %s: %r", order_id, e)
+        return  # event_sent остаётся false -- повторим в следующем цикле
+    if r.status_code == 202:
+        await pool.execute("UPDATE orders SET event_sent = true WHERE id = $1", order_id)
+    else:
+        log.warning("событие %s: код %s", order_id, r.status_code)
+
+
+async def publisher():
+    """Раз в секунду отправляет в шину события по оплаченным заказам, которых там ещё нет."""
+    while True:
+        try:
+            rows = await pool.fetch(
+                "SELECT id FROM orders WHERE status = 'paid' AND NOT event_sent LIMIT $1", PUBLISH_BATCH)
+            await asyncio.gather(*(publish(r["id"]) for r in rows))
+        except Exception:
+            log.exception("publisher")
+        await asyncio.sleep(PUBLISH_INTERVAL)
+
+
 # ---------------------------------------------------------------- HTTP
 
 class Item(BaseModel):
@@ -214,8 +260,14 @@ class OrderRequest(BaseModel):
     items: list[Item] = Field(min_length=1)
 
 
+class DeliveryConfirmed(BaseModel):
+    id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1)
+    bonus_points: StrictInt = Field(ge=1)
+
+
 async def lifespan(_: FastAPI):
-    global pool, http
+    global pool, http, bus
     for _attempt in range(60):  # Postgres может подняться позже сервиса
         try:
             pool = await asyncpg.create_pool(DATABASE_URL)
@@ -227,11 +279,14 @@ async def lifespan(_: FastAPI):
     else:
         raise RuntimeError("база недоступна")
     http = httpx.AsyncClient(timeout=REQUEST_TIMEOUT)
+    bus = httpx.AsyncClient(timeout=BUS_TIMEOUT)
     tasks = [asyncio.create_task(worker()) for _ in range(WORKERS)]
+    tasks.append(asyncio.create_task(publisher()))
     yield
     for t in tasks:
         t.cancel()
     await http.aclose()
+    await bus.aclose()
     await pool.close()
 
 
@@ -267,6 +322,24 @@ async def get_order(order_id: str):
     if row is None:
         return JSONResponse({"error": "not_found"}, status_code=404)
     return dict(row)
+
+
+@app.post("/webhooks/delivery")
+async def delivery_webhook(ev: DeliveryConfirmed):
+    # Одна команда: либо строка вставилась (первое получение события), либо такой id уже
+    # есть и ничего не происходит. Одновременные копии ждут друг друга на PRIMARY KEY,
+    # поэтому начисление ровно одно. Убили посреди запроса -- строка либо есть целиком,
+    # либо нет, и шина пришлёт событие снова. На дубль тоже отвечаем 200.
+    await pool.execute(
+        "INSERT INTO bonus_events (id, user_id, points) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
+        ev.id, ev.user_id, ev.bonus_points)
+    return {"status": "ok"}
+
+
+@app.get("/users/{user_id}/bonus")
+async def get_bonus(user_id: str):
+    points = await pool.fetchval("SELECT COALESCE(SUM(points), 0) FROM bonus_events WHERE user_id = $1", user_id)
+    return {"points": int(points)}  # SUM по BIGINT даёт numeric -- приводим к int
 
 
 if __name__ == "__main__":
